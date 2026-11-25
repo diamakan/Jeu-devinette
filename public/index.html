@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Croquizz</title>
+<meta name="theme-color" content="#5b3df5">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/logo.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Croquizz">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="telephone">
+<div id="horsligne">Connexion au jeu…</div>
+
+<!-- 1. Inscription -->
+<section id="ecran-inscription" class="ecran">
+  <img src="icons/logo.svg" class="logo" alt="">
+  <h1>Croquizz</h1>
+  <p class="sous-titre">Dessine, devine, gagne !</p>
+  <input id="nom" maxlength="14" placeholder="Ton prénom" autocomplete="off">
+  <div id="avatars" class="avatars"></div>
+  <button id="btn-rejoindre" class="gros">C'est parti !</button>
+  <button id="btn-installer" class="lien" hidden>📲 Installer l'appli sur ce téléphone</button>
+</section>
+
+<!-- 2. Salle d'attente -->
+<section id="ecran-accueil" class="ecran" hidden>
+  <h2>Salle d'attente</h2>
+  <ul id="liste-attente" class="joueurs"></ul>
+  <div id="reglages" hidden>
+    <label>Thème des mots<select id="theme"></select></label>
+    <label>Tours par joueur<select id="tours"><option>1</option><option>2</option><option>3</option></select></label>
+    <button id="btn-demarrer" class="gros">Lancer la partie</button>
+    <p class="aide" id="aide-demarrer"></p>
+  </div>
+  <p id="attente-hote" class="aide" hidden>L'hôte va lancer la partie…</p>
+</section>
+
+<!-- 3. Choix du mot (dessinateur) -->
+<section id="ecran-choix" class="ecran" hidden>
+  <h2>À toi de dessiner !</h2>
+  <p class="aide">Choisis ton mot. Plus c'est dur, plus ça rapporte.</p>
+  <div id="cartes" class="cartes"></div>
+</section>
+
+<!-- 4. Dessin (dessinateur) -->
+<section id="ecran-dessin" class="ecran ecran-dessin" hidden>
+  <div class="barre-haut">
+    <div class="mot-secret">✏️ <b id="mot-a-dessiner"></b></div>
+    <div class="chrono" id="chrono-d">90</div>
+  </div>
+  <div id="zone-canvas"><canvas id="feuille"></canvas></div>
+  <div class="outils">
+    <div id="palette" class="palette"></div>
+    <div class="tailles">
+      <button data-w="0.008" class="taille">•</button>
+      <button data-w="0.018" class="taille actif">●</button>
+      <button data-w="0.04" class="taille">⬤</button>
+      <button id="btn-annuler" title="Annuler">↶</button>
+      <button id="btn-effacer" title="Tout effacer">🗑️</button>
+    </div>
+  </div>
+  <details class="valider-main">
+    <summary>Quelqu'un a trouvé à voix haute ? Touchez son nom</summary>
+    <div id="liste-valider" class="pastilles"></div>
+  </details>
+  <button id="btn-fin" class="gros rouge">✋ Fin de manche</button>
+</section>
+
+<!-- 5. Deviner -->
+<section id="ecran-deviner" class="ecran" hidden>
+  <div class="barre-haut">
+    <div id="qui-dessine"></div>
+    <div class="chrono" id="chrono-g">90</div>
+  </div>
+  <div id="masque" class="masque"></div>
+  <p class="aide">Regarde la télé et tape ta réponse</p>
+  <form id="form-proposition">
+    <input id="proposition" placeholder="Ta réponse…" autocomplete="off" autocapitalize="off" maxlength="40">
+    <button class="gros">Envoyer</button>
+  </form>
+  <div id="retour" class="retour"></div>
+  <div id="bravo" class="bravo" hidden>🎉 Bravo, tu as trouvé !<br><small>Attends la fin de la manche…</small></div>
+</section>
+
+<!-- 6. Attente pendant le choix -->
+<section id="ecran-patience" class="ecran" hidden>
+  <div class="gros-emoji" id="patience-avatar">🤔</div>
+  <h2 id="patience-texte"></h2>
+</section>
+
+<!-- 7. Révélation -->
+<section id="ecran-revelation" class="ecran" hidden>
+  <p class="aide">Le mot était…</p>
+  <div id="mot-revele" class="mot-revele"></div>
+  <div id="mon-gain" class="mon-gain"></div>
+  <ul id="classement" class="joueurs classement"></ul>
+  <button id="btn-suivant" class="gros" hidden>Manche suivante ➜</button>
+</section>
+
+<!-- 8. Podium -->
+<section id="ecran-podium" class="ecran" hidden>
+  <h2>🏆 Fin de la partie !</h2>
+  <div id="ma-place" class="gros-emoji"></div>
+  <ul id="classement-final" class="joueurs classement"></ul>
+  <button id="btn-rejouer" class="gros" hidden>Rejouer</button>
+  <button id="btn-retour-accueil" class="lien" hidden>Changer de thème / joueurs</button>
+</section>
+
+<script src="commun.js"></script>
+<script src="telephone.js"></script>
+</body>
+</html>

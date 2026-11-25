@@ -1,0 +1,18 @@
+{
+  "name": "Croquizz – Dessine, devine, gagne !",
+  "short_name": "Croquizz",
+  "description": "Jeu de dessin et de devinettes entre amis : le téléphone dessine, la télé affiche.",
+  "lang": "fr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#3a22b8",
+  "theme_color": "#5b3df5",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/logo.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
