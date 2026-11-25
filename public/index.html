@@ -23,13 +23,30 @@
   <p class="sous-titre">Dessine, devine, gagne !</p>
   <input id="nom" maxlength="14" placeholder="Ton prénom" autocomplete="off">
   <div id="avatars" class="avatars"></div>
-  <button id="btn-rejoindre" class="gros">C'est parti !</button>
+  <div id="bloc-rejoindre-code" class="bloc-code" hidden>
+    <p>Partie <b id="code-invite"></b></p>
+    <button id="btn-rejoindre-invite" class="gros">Rejoindre la partie</button>
+  </div>
+  <div id="bloc-choix-partie">
+    <button id="btn-creer" class="gros">🎉 Créer une partie</button>
+    <p class="aide">ou rejoins une partie avec son code :</p>
+    <div class="ligne-code">
+      <input id="code" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters">
+      <button id="btn-rejoindre" class="gros secondaire">Rejoindre</button>
+    </div>
+  </div>
+  <p id="erreur" class="erreur"></p>
   <button id="btn-installer" class="lien" hidden>📲 Installer l'appli sur ce téléphone</button>
 </section>
 
 <!-- 2. Salle d'attente -->
 <section id="ecran-accueil" class="ecran" hidden>
   <h2>Salle d'attente</h2>
+  <div class="carte-code">Code de la partie<b id="code-salon"></b></div>
+  <div id="bloc-cast" class="bloc-cast">
+    <div id="cast-dispo" hidden><google-cast-launcher id="bouton-cast"></google-cast-launcher><span>Afficher le jeu sur la télé</span></div>
+    <p class="aide" id="cast-aide"></p>
+  </div>
   <ul id="liste-attente" class="joueurs"></ul>
   <div id="reglages" hidden>
     <label>Thème des mots<select id="theme"></select></label>

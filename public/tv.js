@@ -3,16 +3,31 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('tv-feuille'), ctx = canvas.getContext('2d');
 let traits = [], etat = null;
 
-const serveur = connecter(recevoir, (api) => api.envoyer({ t: 'tele' }));
+// Le code du salon vient de l'adresse (/tv?salon=KZPT) ou du téléphone qui caste.
+// Sans code, la télé crée une nouvelle partie.
+let monSalon = (new URLSearchParams(location.search).get('salon') || '').toUpperCase();
+let adresseJeu = location.origin, codeAffiche = null;
+const serveur = connecter(recevoir, (api) => api.envoyer({ t: 'tele', salon: monSalon }));
+window.rejoindreSalon = (code) => {
+  code = String(code || '').toUpperCase();
+  if (!code || code === monSalon) return;
+  monSalon = code; traits = [];
+  serveur.envoyer({ t: 'tele', salon: code });
+};
 
-// Adresse + QR code à scanner
-fetch('/infos').then((r) => r.json()).then(({ adresse }) => {
-  $('adresse').textContent = adresse.replace('http://', '');
+fetch('/infos').then((r) => r.json()).then(({ adresse }) => { adresseJeu = adresse; codeAffiche = null; afficherInvitation(); });
+// Adresse + QR code à scanner pour rejoindre ce salon
+function afficherInvitation() {
+  if (!monSalon || codeAffiche === monSalon) return;
+  codeAffiche = monSalon;
+  const lien = adresseJeu + '/?salon=' + monSalon;
+  $('adresse').textContent = adresseJeu.replace(/^https?:\/\//, '');
+  $('tv-code').textContent = monSalon;
   if (window.qrcode) {
-    const qr = qrcode(0, 'M'); qr.addData(adresse); qr.make();
+    const qr = qrcode(0, 'M'); qr.addData(lien); qr.make();
     $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
   }
-});
+}
 
 function montrer(id) { document.querySelectorAll('.tv-ecran').forEach((s) => (s.hidden = s.id !== id)); }
 
@@ -32,6 +47,8 @@ function recevoir(m) {
 
 function afficher(m) {
   const avant = etat; etat = m;
+  if (m.salon && m.salon !== monSalon) { monSalon = m.salon; history.replaceState(null, '', '?salon=' + m.salon); }
+  afficherInvitation();
   const dessinateur = m.joueurs.find((j) => j.id === m.dessinateur);
   if (m.phase === 'accueil') {
     montrer('tv-accueil');
@@ -104,7 +121,8 @@ function confettis() {
 
 // ---- Sons (générés, aucun fichier nécessaire) ----
 let audio = null;
-document.addEventListener('click', () => { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); $('son').hidden = true; });
+function activerSon() { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); $('son').hidden = true; }
+document.addEventListener('click', activerSon);
 function bip(freq, duree, debut = 0, type = 'sine', volume = 0.2) {
   if (!audio) return;
   const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime + debut;

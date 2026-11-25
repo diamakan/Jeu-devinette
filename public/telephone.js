@@ -13,23 +13,51 @@ $('avatars').onclick = (e) => {
   avatar = e.target.textContent;
   [...$('avatars').children].forEach((b) => b.classList.toggle('actif', b === e.target));
 };
-$('btn-rejoindre').onclick = () => {
+const params = new URLSearchParams(location.search);
+const codeInvite = (params.get('salon') || '').toUpperCase();
+let monSalon = localStorage.getItem('croquizz-salon') || '';
+if (codeInvite) {
+  $('bloc-rejoindre-code').hidden = false; $('bloc-choix-partie').hidden = true;
+  $('code-invite').textContent = codeInvite;
+  if (codeInvite !== monSalon) monId = null; // nouvelle partie : nouveau joueur
+}
+function nomValide() {
   const nom = $('nom').value.trim();
-  if (!nom) { $('nom').focus(); $('nom').classList.add('secoue'); setTimeout(() => $('nom').classList.remove('secoue'), 500); return; }
+  if (!nom) { $('nom').focus(); $('nom').classList.add('secoue'); setTimeout(() => $('nom').classList.remove('secoue'), 500); return null; }
   localStorage.setItem('croquizz-nom', nom); localStorage.setItem('croquizz-avatar', avatar);
+  $('erreur').textContent = '';
+  return nom;
+}
+function entrer(type, salon) {
+  const nom = nomValide(); if (!nom) return;
   inscrit = true;
-  serveur.envoyer({ t: 'rejoindre', id: monId, nom, avatar });
+  serveur.envoyer({ t: type, salon, id: type === 'creer' ? null : (salon === monSalon ? monId : null), nom, avatar });
+}
+$('btn-creer').onclick = () => entrer('creer', '');
+$('btn-rejoindre').onclick = () => {
+  const code = $('code').value.trim().toUpperCase();
+  if (code.length !== 4) { $('erreur').textContent = 'Le code fait 4 lettres, il est affiché sur la télé.'; return; }
+  entrer('rejoindre', code);
 };
+$('btn-rejoindre-invite').onclick = () => entrer('rejoindre', codeInvite);
 
 const serveur = connecter(recevoir, (api) => {
-  // reconnexion automatique si on était déjà inscrit
-  if (inscrit || monId) { inscrit = true; api.envoyer({ t: 'rejoindre', id: monId, nom: localStorage.getItem('croquizz-nom'), avatar }); }
+  // reconnexion automatique si on était déjà dans une partie
+  const salon = codeInvite || monSalon;
+  if (inscrit || (monId && salon && salon === monSalon)) { inscrit = true; api.envoyer({ t: 'rejoindre', salon, id: monId, nom: localStorage.getItem('croquizz-nom'), avatar }); }
 });
 
 function montrer(id) { document.querySelectorAll('.ecran').forEach((s) => (s.hidden = s.id !== id)); }
 
 function recevoir(m) {
-  if (m.t === 'bienvenue') { monId = m.id; localStorage.setItem('croquizz-id', m.id); return; }
+  if (m.t === 'bienvenue') {
+    monId = m.id; monSalon = m.salon;
+    localStorage.setItem('croquizz-id', m.id); localStorage.setItem('croquizz-salon', m.salon);
+    history.replaceState(null, '', '?salon=' + m.salon); // pour retrouver la partie si on recharge la page
+    envoyerCodeTele();
+    return;
+  }
+  if (m.t === 'erreur') { inscrit = false; $('erreur').textContent = m.texte; montrer('ecran-inscription'); return; }
   if (m.t === 'temps') { $('chrono-d').textContent = $('chrono-g').textContent = m.restant; document.body.classList.toggle('urgence', m.restant <= 10); return; }
   if (m.t === 'resultat') { retour(m); return; }
   if (m.t === 'traits') { traits = m.traits; toutRedessiner(ctx, traits); return; }
@@ -44,6 +72,7 @@ function recevoir(m) {
 
   if (m.phase === 'accueil') {
     montrer('ecran-accueil');
+    $('code-salon').textContent = m.salon;
     $('liste-attente').innerHTML = m.joueurs.map((j) => `<li>${j.avatar} ${echapper(j.nom)}${j.id === m.hote ? ' <small>(hôte)</small>' : ''}${j.id === m.moi ? ' <small>← toi</small>' : ''}</li>`).join('');
     $('reglages').hidden = !suisHote; $('attente-hote').hidden = suisHote;
     if (suisHote) {
@@ -184,3 +213,43 @@ let invitation = null;
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); invitation = e; $('btn-installer').hidden = false; });
 $('btn-installer').onclick = async () => { if (!invitation) return; invitation.prompt(); await invitation.userChoice; invitation = null; $('btn-installer').hidden = true; };
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js');
+
+// ---- Bouton Cast (Chromecast) ----
+const ESPACE_CAST = 'urn:x-cast:fr.croquizz';
+let adresseJeu = location.origin;
+fetch('/infos').then((r) => r.json()).then(({ adresse, castAppId }) => {
+  adresseJeu = adresse;
+  aideCast();
+  if (!castAppId) return;
+  window.__onGCastApiAvailable = (dispo) => {
+    if (!dispo) return;
+    const ctxCast = cast.framework.CastContext.getInstance();
+    ctxCast.setOptions({ receiverApplicationId: castAppId, autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED });
+    ctxCast.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => {
+      if (e.sessionState === 'SESSION_STARTED' || e.sessionState === 'SESSION_RESUMED') envoyerCodeTele();
+    });
+    // le bouton n'apparaît que si un Chromecast est trouvé sur le Wi-Fi
+    ctxCast.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, aideCast);
+    aideCast();
+  };
+  const sc = document.createElement('script');
+  sc.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
+  document.head.appendChild(sc);
+});
+function etatCast() { try { return cast.framework.CastContext.getInstance().getCastState(); } catch (e) { return null; } }
+function aideCast() {
+  const e = etatCast();
+  const dispo = e && e !== 'NO_DEVICES_AVAILABLE';
+  $('cast-dispo').hidden = !dispo;
+  const lien = adresseJeu.replace(/^https?:\/\//, '') + '/tv?salon=' + (monSalon || '');
+  $('cast-aide').innerHTML = e === 'CONNECTED' ? '📺 Le jeu est affiché sur la télé !'
+    : dispo ? `Touche le bouton pour envoyer le jeu sur le Chromecast.<br>Sinon, ouvre sur la télé : <b>${echapper(lien)}</b>`
+      : `Pour afficher le jeu, ouvre sur la télé : <b>${echapper(lien)}</b>`;
+}
+function envoyerCodeTele() {
+  aideCast();
+  try {
+    const session = cast.framework.CastContext.getInstance().getCurrentSession();
+    if (session && monSalon) session.sendMessage(ESPACE_CAST, { salon: monSalon });
+  } catch (e) { /* pas de Chromecast */ }
+}
