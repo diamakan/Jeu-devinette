@@ -1,0 +1,12 @@
+# Configuration pour l'hébergeur Render (https://render.com) : mise en ligne en un clic.
+services:
+  - type: web
+    name: croquizz
+    runtime: node
+    plan: free
+    buildCommand: echo "Rien à installer"
+    startCommand: node server.js
+    healthCheckPath: /infos
+    envVars:
+      - key: CAST_APP_ID
+        sync: false   # l'identifiant Google Cast, à coller dans Render une fois obtenu

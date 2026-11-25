@@ -135,3 +135,19 @@ aside .joueurs li.absent { opacity: .4; }
 #tv-autres { width: 50vw; }
 #confettis { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
 .son { position: fixed; bottom: 2vh; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.5); padding: 1vh 2vh; border-radius: 999px; font-size: 2.4vh; z-index: 30; }
+
+/* ---------------- Salons et Cast ---------------- */
+.bloc-code, #bloc-choix-partie { display: flex; flex-direction: column; gap: 10px; }
+.bloc-code p { margin: 0; font-size: 18px; }
+.bloc-code b { color: var(--jaune); letter-spacing: .15em; }
+.ligne-code { display: flex; gap: 8px; }
+.ligne-code input { text-transform: uppercase; letter-spacing: .3em; text-align: center; font-weight: bold; }
+.gros.secondaire { background: #fff; box-shadow: 0 5px 0 #b9b2e6; padding: 12px 16px; font-size: 18px; }
+.erreur { color: #ffd1dc; font-weight: bold; min-height: 1.2em; margin: 0; }
+.carte-code { background: #fff; color: var(--doux); border-radius: 16px; padding: 10px; font-size: 14px; font-weight: bold; text-transform: uppercase; display: flex; flex-direction: column; }
+.carte-code b { color: var(--violet); font-size: 40px; letter-spacing: .25em; }
+.bloc-cast { background: rgba(255,255,255,.12); border-radius: 16px; padding: 12px; }
+#cast-dispo { display: flex; align-items: center; justify-content: center; gap: 12px; font-weight: bold; font-size: 18px; margin-bottom: 6px; }
+#bouton-cast { width: 48px; height: 48px; --connected-color: #ffd23f; --disconnected-color: #fff; cursor: pointer; }
+.bloc-cast .aide b { color: var(--jaune); word-break: break-all; }
+#tv-code { letter-spacing: .3em; font-size: 9vh; }

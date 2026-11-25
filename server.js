@@ -21,7 +21,24 @@ const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/') url = '/index.html';
   if (url === '/tv') url = '/tv.html';
-  if (url === '/infos') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ adresse: adresseLocale(), themes: Object.keys(MOTS) })); }
+  if (url === '/infos') {
+    // en ligne : on utilise l'adresse publique du site ; à la maison : l'adresse de l'ordinateur sur le Wi-Fi
+    const hoteHttp = req.headers['x-forwarded-host'] || req.headers.host || '';
+    const enLigne = !/^(localhost|127\.|192\.168\.|10\.|172\.)/.test(hoteHttp);
+    const adresse = process.env.ADRESSE_PUBLIQUE || (enLigne ? `${req.headers['x-forwarded-proto'] || 'https'}://${hoteHttp}` : adresseLocale());
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify({ adresse, castAppId: process.env.CAST_APP_ID || '' }));
+  }
+  if (url === '/recepteur') {
+    // l'écran du Chromecast = l'écran télé + la bibliothèque Google Cast
+    return fs.readFile(path.join(PUBLIC, 'tv.html'), 'utf8', (err, html) => {
+      if (err) { res.writeHead(500); return res.end(); }
+      html = html.replace('<script src="commun.js"></script>', '<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>\n<script src="commun.js"></script>')
+        .replace('</body>', '<script src="recepteur.js"></script>\n</body>');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(html);
+    });
+  }
   const file = path.normalize(path.join(PUBLIC, url));
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
@@ -60,7 +77,7 @@ server.on('upgrade', (req, socket) => {
       buf = buf.slice(total);
       if (op === 8) { socket.end(); return; }
       if (op === 9) { const pong = Buffer.concat([Buffer.from([0x8a, data.length]), data]); socket.write(pong); continue; }
-      if (op === 1) { try { recevoir(client, JSON.parse(data.toString())); } catch (e) { console.error('Message invalide', e.message); } }
+      if (op === 1) { try { recevoirMessage(client, JSON.parse(data.toString())); } catch (e) { console.error('Message invalide', e.message); } }
     }
   });
   socket.on('close', () => deconnexion(client));
@@ -77,18 +94,6 @@ function envoyerTrame(socket, texte) {
   socket.write(Buffer.concat([entete, data]));
 }
 
-// ---------- Jeu ----------
-const joueurs = new Map();   // id -> {id, nom, avatar, score, client, connecte}
-const teles = new Set();
-const jeu = {
-  phase: 'accueil',          // accueil | choix | dessin | revelation | podium
-  theme: 'Maison & Bricolage', toursParJoueur: 1,
-  ordre: [], tour: 0, dessinateur: null,
-  propositions: [], mot: null, niveau: null,
-  finAt: 0, trouves: [], gains: {}, traits: [], indices: [], fil: []
-};
-let minuteur = null;
-
 const normaliser = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/œ/g, 'oe').replace(/[^a-z0-9]/g, '');
 function distance(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
@@ -98,181 +103,236 @@ function distance(a, b) {
   return d[a.length][b.length];
 }
 const melanger = (t) => { t = [...t]; for (let i = t.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [t[i], t[j]] = [t[j], t[i]]; } return t; };
-const hote = () => [...joueurs.values()].find((j) => j.connecte);
 
-function masque() {
-  if (!jeu.mot) return '';
-  return [...jeu.mot].map((c, i) => (/[a-zA-Zà-üœ]/i.test(c) ? (jeu.indices.includes(i) ? c : '_') : c)).join('');
+// ---------- Salons ----------
+// Chaque partie a son propre salon, identifié par un code de 4 lettres (ex. KZPT).
+const salons = new Map();
+const LETTRES = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // sans I ni O pour éviter les confusions
+function nouveauCode() {
+  let c;
+  do { c = Array.from({ length: 4 }, () => LETTRES[Math.floor(Math.random() * LETTRES.length)]).join(''); } while (salons.has(c));
+  return c;
 }
+const nettoyerCode = (c) => String(c || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
 
-function etatPublic() {
-  return {
-    t: 'etat', phase: jeu.phase, theme: jeu.theme, themes: Object.keys(MOTS), toursParJoueur: jeu.toursParJoueur,
-    hote: hote()?.id || null, dessinateur: jeu.dessinateur, niveau: jeu.niveau, points: POINTS,
-    tour: jeu.tour, totalTours: jeu.ordre.length,
-    masque: jeu.phase === 'dessin' ? masque() : null,
-    mot: ['revelation', 'podium'].includes(jeu.phase) ? jeu.mot : null,
-    restant: jeu.phase === 'dessin' ? Math.max(0, Math.round((jeu.finAt - Date.now()) / 1000)) : 0,
-    duree: DUREE_MANCHE, trouves: jeu.trouves, gains: jeu.gains, fil: jeu.fil.slice(-8),
-    joueurs: [...joueurs.values()].map(({ id, nom, avatar, score, connecte }) => ({ id, nom, avatar, score, connecte }))
-  };
-}
-
-function diffuser() {
-  const etat = etatPublic();
-  for (const t of teles) t.send(etat);
-  for (const j of joueurs.values()) if (j.client) {
-    const perso = { ...etat, moi: j.id };
-    if (j.id === jeu.dessinateur) { perso.motSecret = jeu.mot; if (jeu.phase === 'choix') perso.propositions = jeu.propositions; }
-    j.client.send(perso);
-  }
-}
-const versTeles = (msg) => { for (const t of teles) t.send(msg); };
-const versTous = (msg) => { versTeles(msg); for (const j of joueurs.values()) j.client?.send(msg); };
-
-function demarrer(theme, tours) {
-  const ids = [...joueurs.values()].filter((j) => j.connecte).map((j) => j.id);
-  if (ids.length < 2) return;
-  jeu.theme = MOTS[theme] ? theme : jeu.theme;
-  jeu.toursParJoueur = Math.min(3, Math.max(1, tours | 0 || 1));
-  for (const j of joueurs.values()) j.score = 0;
-  jeu.ordre = [];
-  for (let r = 0; r < jeu.toursParJoueur; r++) jeu.ordre.push(...melanger(ids));
-  jeu.tour = 0; jeu.dejaVus = new Set();
-  nouvelleManche();
-}
-
-function nouvelleManche() {
-  clearInterval(minuteur);
-  // on saute les joueurs partis
-  while (jeu.tour < jeu.ordre.length && !joueurs.get(jeu.ordre[jeu.tour])?.connecte) jeu.tour++;
-  if (jeu.tour >= jeu.ordre.length) { jeu.phase = 'podium'; jeu.mot = null; diffuser(); versTous({ t: 'son', nom: 'podium' }); return; }
-  jeu.dessinateur = jeu.ordre[jeu.tour];
-  const liste = MOTS[jeu.theme];
-  jeu.propositions = ['facile', 'moyen', 'difficile'].map((niveau) => {
-    const dispo = liste[niveau].filter((m) => !jeu.dejaVus.has(m));
-    const mot = (dispo.length ? dispo : liste[niveau])[Math.floor(Math.random() * (dispo.length || liste[niveau].length))];
-    return { niveau, mot, points: POINTS[niveau] };
-  });
-  Object.assign(jeu, { phase: 'choix', mot: null, niveau: null, trouves: [], gains: {}, traits: [], indices: [], fil: [] });
-  versTeles({ t: 'effacer' });
-  diffuser();
-}
-
-function choisir(idx) {
-  const p = jeu.propositions[idx];
-  if (!p) return;
-  jeu.mot = p.mot; jeu.niveau = p.niveau; jeu.dejaVus.add(p.mot);
-  jeu.phase = 'dessin'; jeu.finAt = Date.now() + DUREE_MANCHE * 1000;
-  const lettres = [...jeu.mot].map((c, i) => (/[a-zà-üœ]/i.test(c) ? i : -1)).filter((i) => i >= 0);
-  const ordreIndices = melanger(lettres);
-  let indicesDonnes = 0;
-  minuteur = setInterval(() => {
-    const restant = (jeu.finAt - Date.now()) / 1000;
-    // Indices : une lettre à mi-temps, une autre à 25 s de la fin (si le mot est assez long)
-    const voulu = restant < DUREE_MANCHE / 2 ? (restant < 25 && lettres.length > 5 ? 2 : 1) : 0;
-    if (voulu > indicesDonnes && lettres.length > 3) { jeu.indices.push(ordreIndices[indicesDonnes++]); jeu.fil.push({ type: 'indice', texte: '💡 Indice : une lettre est révélée !' }); diffuser(); }
-    if (restant <= 10 && restant > 0) versTeles({ t: 'son', nom: 'tic' });
-    if (restant <= 0) finManche();
-    else versTous({ t: 'temps', restant: Math.round(restant) });
-  }, 1000);
-  diffuser();
-}
-
-function attribuer(id) {
-  const j = joueurs.get(id);
-  if (!j || id === jeu.dessinateur || jeu.trouves.includes(id) || jeu.phase !== 'dessin') return;
-  const base = POINTS[jeu.niveau];
-  const rapidite = Math.max(0, (jeu.finAt - Date.now()) / (DUREE_MANCHE * 1000));
-  let gain = base + Math.round(rapidite * 100);
-  const premier = jeu.trouves.length === 0;
-  if (premier) gain += BONUS_PREMIER;
-  jeu.trouves.push(id);
-  jeu.gains[id] = gain; j.score += gain;
-  const d = joueurs.get(jeu.dessinateur);
-  const gainDessin = Math.round(base / 2);
-  if (d) { d.score += gainDessin; jeu.gains[d.id] = (jeu.gains[d.id] || 0) + gainDessin; }
-  jeu.fil.push({ type: 'trouve', texte: `✅ ${j.avatar} ${j.nom} a trouvé !${premier ? ' (1er : +' + BONUS_PREMIER + ')' : ''}` });
-  versTous({ t: 'son', nom: 'trouve' });
-  const devineurs = [...joueurs.values()].filter((x) => x.connecte && x.id !== jeu.dessinateur);
-  if (devineurs.every((x) => jeu.trouves.includes(x.id))) return finManche();
-  diffuser();
-}
-
-function finManche() {
-  if (jeu.phase !== 'dessin') return;
-  clearInterval(minuteur);
-  jeu.phase = 'revelation';
-  versTous({ t: 'son', nom: 'revelation' });
-  diffuser();
-}
-
-function recevoir(client, m) {
-  if (m.t === 'tele') { client.role = 'tele'; teles.add(client); client.send(etatPublic()); client.send({ t: 'traits', traits: jeu.traits }); return; }
-
-  if (m.t === 'rejoindre') {
-    let j = m.id && joueurs.get(m.id);
-    if (!j) {
-      const nom = String(m.nom || '').trim().slice(0, 14) || 'Joueur';
-      j = { id: crypto.randomUUID(), nom, avatar: String(m.avatar || '🙂').slice(0, 4), score: 0 };
-      joueurs.set(j.id, j);
-      if (jeu.phase !== 'accueil' && jeu.phase !== 'podium') jeu.ordre.push(j.id); // arrivé en cours : il dessinera plus tard
+function recevoirMessage(client, m) {
+  if (m.t === 'tele' || m.t === 'rejoindre' || m.t === 'creer') {
+    let code = nettoyerCode(m.salon);
+    let salon = salons.get(code);
+    if (!salon) {
+      // une télé ou un téléphone qui crée la partie ouvre un nouveau salon ;
+      // un joueur qui se reconnecte à un salon disparu (serveur redémarré) en recrée un avec le même code
+      if (m.t === 'rejoindre' && code && !m.id) return client.send({ t: 'erreur', texte: `Aucune partie avec le code ${code}. Vérifie le code affiché sur la télé.` });
+      code = code && !salons.has(code) && m.t !== 'creer' ? code : nouveauCode();
+      salon = creerSalon(code);
+      salons.set(code, salon);
     }
-    if (j.client && j.client !== client) j.client.socket.destroy();
-    j.client = client; j.connecte = true; client.joueur = j;
-    client.send({ t: 'bienvenue', id: j.id });
-    diffuser();
-    if (jeu.phase === 'dessin' && j.id === jeu.dessinateur) client.send({ t: 'traits', traits: jeu.traits });
-    return;
+    if (client.salon && client.salon !== salon) client.salon.deconnexion(client);
+    return salon.recevoir(client, m.t === 'creer' ? { ...m, t: 'rejoindre', id: null } : m);
   }
-
-  const j = client.joueur;
-  if (!j) return;
-  const estDessinateur = j.id === jeu.dessinateur;
-  const estHote = hote()?.id === j.id;
-
-  switch (m.t) {
-    case 'reglages': if (estHote && jeu.phase === 'accueil') { if (MOTS[m.theme]) jeu.theme = m.theme; jeu.toursParJoueur = Math.min(3, Math.max(1, m.tours | 0)); diffuser(); } break;
-    case 'demarrer': if (estHote && (jeu.phase === 'accueil' || jeu.phase === 'podium')) demarrer(m.theme || jeu.theme, m.tours || jeu.toursParJoueur); break;
-    case 'choisir': if (estDessinateur && jeu.phase === 'choix') choisir(m.idx); break;
-    case 'trait': if (estDessinateur && jeu.phase === 'dessin') {
-      // m.etape: 'debut' {c, w, p:[x,y]} | 'suite' {p:[[x,y]...]}
-      if (m.etape === 'debut') jeu.traits.push({ c: m.c, w: m.w, p: [m.p] });
-      else if (m.etape === 'suite' && jeu.traits.length) jeu.traits[jeu.traits.length - 1].p.push(...m.p);
-      versTeles(m);
-    } break;
-    case 'annuler': if (estDessinateur) { jeu.traits.pop(); versTeles({ t: 'traits', traits: jeu.traits }); } break;
-    case 'effacer': if (estDessinateur) { jeu.traits = []; versTeles({ t: 'effacer' }); } break;
-    case 'proposition': if (jeu.phase === 'dessin' && !estDessinateur && !jeu.trouves.includes(j.id)) {
-      const essai = String(m.texte || '').slice(0, 40).trim();
-      if (!essai) break;
-      const a = normaliser(essai), b = normaliser(jeu.mot);
-      if (a === b) { client.send({ t: 'resultat', ok: true }); attribuer(j.id); }
-      else {
-        const presque = b.length >= 4 && distance(a, b) <= (b.length > 7 ? 2 : 1);
-        client.send({ t: 'resultat', ok: false, presque });
-        jeu.fil.push({ type: 'essai', texte: `${j.avatar} ${j.nom} : ${essai}` });
-        diffuser();
-      }
-    } break;
-    case 'valider': if (estDessinateur) attribuer(m.id); break;            // le dessinateur valide à la main (réponse dite à voix haute)
-    case 'finManche': if (estDessinateur) finManche(); break;              // bouton « Fin de manche »
-    case 'suivant': if ((estDessinateur || estHote) && jeu.phase === 'revelation') { jeu.tour++; nouvelleManche(); } break;
-    case 'accueil': if (estHote && jeu.phase === 'podium') { jeu.phase = 'accueil'; diffuser(); } break;
-  }
+  if (client.salon) client.salon.recevoir(client, m);
 }
+function deconnexion(client) { if (client.salon) client.salon.deconnexion(client); }
 
-function deconnexion(client) {
-  teles.delete(client);
-  const j = client.joueur;
-  if (!j || j.client !== client) return;
-  j.client = null; j.connecte = false;
-  if (jeu.phase === 'accueil') joueurs.delete(j.id);
-  // tout le monde est parti : on remet le jeu à zéro
-  if (![...joueurs.values()].some((x) => x.connecte)) { clearInterval(minuteur); joueurs.clear(); jeu.phase = 'accueil'; jeu.dessinateur = null; jeu.traits = []; diffuser(); return; }
-  if (j.id === jeu.dessinateur && jeu.phase === 'choix') { jeu.tour++; nouvelleManche(); return; }
-  if (j.id === jeu.dessinateur && jeu.phase === 'dessin') { finManche(); return; }
-  diffuser();
+function creerSalon(code) {
+  let minuteurVide = null;
+  // le salon disparaît après 30 minutes sans personne
+  function verifierVide() {
+    clearTimeout(minuteurVide);
+    if (teles.size === 0 && ![...joueurs.values()].some((x) => x.connecte))
+      minuteurVide = setTimeout(() => { clearInterval(minuteur); salons.delete(code); }, 30 * 60 * 1000);
+  }
+  const joueurs = new Map();   // id -> {id, nom, avatar, score, client, connecte}
+  const teles = new Set();
+  const jeu = {
+    phase: 'accueil',          // accueil | choix | dessin | revelation | podium
+    theme: 'Maison & Bricolage', toursParJoueur: 1,
+    ordre: [], tour: 0, dessinateur: null,
+    propositions: [], mot: null, niveau: null,
+    finAt: 0, trouves: [], gains: {}, traits: [], indices: [], fil: []
+  };
+  let minuteur = null;
+
+  const hote = () => [...joueurs.values()].find((j) => j.connecte);
+
+  function masque() {
+    if (!jeu.mot) return '';
+    return [...jeu.mot].map((c, i) => (/[a-zA-Zà-üœ]/i.test(c) ? (jeu.indices.includes(i) ? c : '_') : c)).join('');
+  }
+
+  function etatPublic() {
+    return {
+      t: 'etat', salon: code, phase: jeu.phase, theme: jeu.theme, themes: Object.keys(MOTS), toursParJoueur: jeu.toursParJoueur,
+      hote: hote()?.id || null, dessinateur: jeu.dessinateur, niveau: jeu.niveau, points: POINTS,
+      tour: jeu.tour, totalTours: jeu.ordre.length,
+      masque: jeu.phase === 'dessin' ? masque() : null,
+      mot: ['revelation', 'podium'].includes(jeu.phase) ? jeu.mot : null,
+      restant: jeu.phase === 'dessin' ? Math.max(0, Math.round((jeu.finAt - Date.now()) / 1000)) : 0,
+      duree: DUREE_MANCHE, trouves: jeu.trouves, gains: jeu.gains, fil: jeu.fil.slice(-8),
+      joueurs: [...joueurs.values()].map(({ id, nom, avatar, score, connecte }) => ({ id, nom, avatar, score, connecte }))
+    };
+  }
+
+  function diffuser() {
+    const etat = etatPublic();
+    for (const t of teles) t.send(etat);
+    for (const j of joueurs.values()) if (j.client) {
+      const perso = { ...etat, moi: j.id };
+      if (j.id === jeu.dessinateur) { perso.motSecret = jeu.mot; if (jeu.phase === 'choix') perso.propositions = jeu.propositions; }
+      j.client.send(perso);
+    }
+  }
+  const versTeles = (msg) => { for (const t of teles) t.send(msg); };
+  const versTous = (msg) => { versTeles(msg); for (const j of joueurs.values()) j.client?.send(msg); };
+
+  function demarrer(theme, tours) {
+    const ids = [...joueurs.values()].filter((j) => j.connecte).map((j) => j.id);
+    if (ids.length < 2) return;
+    jeu.theme = MOTS[theme] ? theme : jeu.theme;
+    jeu.toursParJoueur = Math.min(3, Math.max(1, tours | 0 || 1));
+    for (const j of joueurs.values()) j.score = 0;
+    jeu.ordre = [];
+    for (let r = 0; r < jeu.toursParJoueur; r++) jeu.ordre.push(...melanger(ids));
+    jeu.tour = 0; jeu.dejaVus = new Set();
+    nouvelleManche();
+  }
+
+  function nouvelleManche() {
+    clearInterval(minuteur);
+    // on saute les joueurs partis
+    while (jeu.tour < jeu.ordre.length && !joueurs.get(jeu.ordre[jeu.tour])?.connecte) jeu.tour++;
+    if (jeu.tour >= jeu.ordre.length) { jeu.phase = 'podium'; jeu.mot = null; diffuser(); versTous({ t: 'son', nom: 'podium' }); return; }
+    jeu.dessinateur = jeu.ordre[jeu.tour];
+    const liste = MOTS[jeu.theme];
+    jeu.propositions = ['facile', 'moyen', 'difficile'].map((niveau) => {
+      const dispo = liste[niveau].filter((m) => !jeu.dejaVus.has(m));
+      const mot = (dispo.length ? dispo : liste[niveau])[Math.floor(Math.random() * (dispo.length || liste[niveau].length))];
+      return { niveau, mot, points: POINTS[niveau] };
+    });
+    Object.assign(jeu, { phase: 'choix', mot: null, niveau: null, trouves: [], gains: {}, traits: [], indices: [], fil: [] });
+    versTeles({ t: 'effacer' });
+    diffuser();
+  }
+
+  function choisir(idx) {
+    const p = jeu.propositions[idx];
+    if (!p) return;
+    jeu.mot = p.mot; jeu.niveau = p.niveau; jeu.dejaVus.add(p.mot);
+    jeu.phase = 'dessin'; jeu.finAt = Date.now() + DUREE_MANCHE * 1000;
+    const lettres = [...jeu.mot].map((c, i) => (/[a-zà-üœ]/i.test(c) ? i : -1)).filter((i) => i >= 0);
+    const ordreIndices = melanger(lettres);
+    let indicesDonnes = 0;
+    minuteur = setInterval(() => {
+      const restant = (jeu.finAt - Date.now()) / 1000;
+      // Indices : une lettre à mi-temps, une autre à 25 s de la fin (si le mot est assez long)
+      const voulu = restant < DUREE_MANCHE / 2 ? (restant < 25 && lettres.length > 5 ? 2 : 1) : 0;
+      if (voulu > indicesDonnes && lettres.length > 3) { jeu.indices.push(ordreIndices[indicesDonnes++]); jeu.fil.push({ type: 'indice', texte: '💡 Indice : une lettre est révélée !' }); diffuser(); }
+      if (restant <= 10 && restant > 0) versTeles({ t: 'son', nom: 'tic' });
+      if (restant <= 0) finManche();
+      else versTous({ t: 'temps', restant: Math.round(restant) });
+    }, 1000);
+    diffuser();
+  }
+
+  function attribuer(id) {
+    const j = joueurs.get(id);
+    if (!j || id === jeu.dessinateur || jeu.trouves.includes(id) || jeu.phase !== 'dessin') return;
+    const base = POINTS[jeu.niveau];
+    const rapidite = Math.max(0, (jeu.finAt - Date.now()) / (DUREE_MANCHE * 1000));
+    let gain = base + Math.round(rapidite * 100);
+    const premier = jeu.trouves.length === 0;
+    if (premier) gain += BONUS_PREMIER;
+    jeu.trouves.push(id);
+    jeu.gains[id] = gain; j.score += gain;
+    const d = joueurs.get(jeu.dessinateur);
+    const gainDessin = Math.round(base / 2);
+    if (d) { d.score += gainDessin; jeu.gains[d.id] = (jeu.gains[d.id] || 0) + gainDessin; }
+    jeu.fil.push({ type: 'trouve', texte: `✅ ${j.avatar} ${j.nom} a trouvé !${premier ? ' (1er : +' + BONUS_PREMIER + ')' : ''}` });
+    versTous({ t: 'son', nom: 'trouve' });
+    const devineurs = [...joueurs.values()].filter((x) => x.connecte && x.id !== jeu.dessinateur);
+    if (devineurs.every((x) => jeu.trouves.includes(x.id))) return finManche();
+    diffuser();
+  }
+
+  function finManche() {
+    if (jeu.phase !== 'dessin') return;
+    clearInterval(minuteur);
+    jeu.phase = 'revelation';
+    versTous({ t: 'son', nom: 'revelation' });
+    diffuser();
+  }
+
+  function recevoir(client, m) {
+    if (m.t === 'tele') { client.role = 'tele'; client.salon = salon; teles.add(client); client.send(etatPublic()); client.send({ t: 'traits', traits: jeu.traits }); return; }
+
+    if (m.t === 'rejoindre') {
+      let j = m.id && joueurs.get(m.id);
+      if (!j) {
+        const nom = String(m.nom || '').trim().slice(0, 14) || 'Joueur';
+        j = { id: crypto.randomUUID(), nom, avatar: String(m.avatar || '🙂').slice(0, 4), score: 0 };
+        joueurs.set(j.id, j);
+        if (jeu.phase !== 'accueil' && jeu.phase !== 'podium') jeu.ordre.push(j.id); // arrivé en cours : il dessinera plus tard
+      }
+      if (j.client && j.client !== client) j.client.socket.destroy();
+      j.client = client; j.connecte = true; client.joueur = j; client.salon = salon;
+      client.send({ t: 'bienvenue', id: j.id, salon: code });
+      diffuser();
+      if (jeu.phase === 'dessin' && j.id === jeu.dessinateur) client.send({ t: 'traits', traits: jeu.traits });
+      return;
+    }
+
+    const j = client.joueur;
+    if (!j) return;
+    const estDessinateur = j.id === jeu.dessinateur;
+    const estHote = hote()?.id === j.id;
+
+    switch (m.t) {
+      case 'reglages': if (estHote && jeu.phase === 'accueil') { if (MOTS[m.theme]) jeu.theme = m.theme; jeu.toursParJoueur = Math.min(3, Math.max(1, m.tours | 0)); diffuser(); } break;
+      case 'demarrer': if (estHote && (jeu.phase === 'accueil' || jeu.phase === 'podium')) demarrer(m.theme || jeu.theme, m.tours || jeu.toursParJoueur); break;
+      case 'choisir': if (estDessinateur && jeu.phase === 'choix') choisir(m.idx); break;
+      case 'trait': if (estDessinateur && jeu.phase === 'dessin') {
+        // m.etape: 'debut' {c, w, p:[x,y]} | 'suite' {p:[[x,y]...]}
+        if (m.etape === 'debut') jeu.traits.push({ c: m.c, w: m.w, p: [m.p] });
+        else if (m.etape === 'suite' && jeu.traits.length) jeu.traits[jeu.traits.length - 1].p.push(...m.p);
+        versTeles(m);
+      } break;
+      case 'annuler': if (estDessinateur) { jeu.traits.pop(); versTeles({ t: 'traits', traits: jeu.traits }); } break;
+      case 'effacer': if (estDessinateur) { jeu.traits = []; versTeles({ t: 'effacer' }); } break;
+      case 'proposition': if (jeu.phase === 'dessin' && !estDessinateur && !jeu.trouves.includes(j.id)) {
+        const essai = String(m.texte || '').slice(0, 40).trim();
+        if (!essai) break;
+        const a = normaliser(essai), b = normaliser(jeu.mot);
+        if (a === b) { client.send({ t: 'resultat', ok: true }); attribuer(j.id); }
+        else {
+          const presque = b.length >= 4 && distance(a, b) <= (b.length > 7 ? 2 : 1);
+          client.send({ t: 'resultat', ok: false, presque });
+          jeu.fil.push({ type: 'essai', texte: `${j.avatar} ${j.nom} : ${essai}` });
+          diffuser();
+        }
+      } break;
+      case 'valider': if (estDessinateur) attribuer(m.id); break;            // le dessinateur valide à la main (réponse dite à voix haute)
+      case 'finManche': if (estDessinateur) finManche(); break;              // bouton « Fin de manche »
+      case 'suivant': if ((estDessinateur || estHote) && jeu.phase === 'revelation') { jeu.tour++; nouvelleManche(); } break;
+      case 'accueil': if (estHote && jeu.phase === 'podium') { jeu.phase = 'accueil'; diffuser(); } break;
+    }
+  }
+
+  function deconnexion(client) {
+    teles.delete(client); verifierVide();
+    const j = client.joueur;
+    if (!j || j.client !== client) return;
+    j.client = null; j.connecte = false;
+    if (jeu.phase === 'accueil') joueurs.delete(j.id);
+    // tout le monde est parti : on remet le jeu à zéro
+    if (![...joueurs.values()].some((x) => x.connecte)) { clearInterval(minuteur); joueurs.clear(); jeu.phase = 'accueil'; jeu.dessinateur = null; jeu.traits = []; diffuser(); verifierVide(); return; }
+    if (j.id === jeu.dessinateur && jeu.phase === 'choix') { jeu.tour++; nouvelleManche(); return; }
+    if (j.id === jeu.dessinateur && jeu.phase === 'dessin') { finManche(); return; }
+    diffuser();
+  }
+
+
+  const salon = { recevoir, deconnexion, code };
+  return salon;
 }
 
 server.listen(PORT, () => {
