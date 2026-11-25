@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Croquizz · Télé</title>
+<link rel="icon" href="icons/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="tele">
+<div id="horsligne">Connexion au serveur du jeu…</div>
+<div id="son" class="son">🔊 Cliquez n'importe où pour activer le son</div>
+
+<!-- Accueil -->
+<section id="tv-accueil" class="tv-ecran">
+  <div class="tv-titre"><img src="icons/logo.svg" alt=""><div><h1>Croquizz</h1><p>Dessine, devine, gagne !</p></div></div>
+  <div class="tv-rejoindre">
+    <div id="qr" class="qr"></div>
+    <div>
+      <p>Pour jouer, ouvrez sur votre téléphone :</p>
+      <p class="adresse" id="adresse"></p>
+      <p class="petit">(tous les téléphones doivent être sur le même Wi-Fi)</p>
+    </div>
+  </div>
+  <div id="tv-joueurs" class="tv-joueurs"></div>
+  <p id="tv-reglages" class="petit"></p>
+</section>
+
+<!-- Jeu -->
+<section id="tv-jeu" class="tv-ecran" hidden>
+  <header class="tv-barre">
+    <div id="tv-dessinateur"></div>
+    <div id="tv-masque" class="masque"></div>
+    <div class="tv-chrono"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" class="fond"/><circle cx="18" cy="18" r="16" id="arc" class="arc"/></svg><span id="tv-temps"></span></div>
+  </header>
+  <div class="tv-corps">
+    <div id="tv-zone"><canvas id="tv-feuille"></canvas>
+      <div id="tv-choix" class="voile"><div class="gros-emoji" id="tv-choix-avatar"></div><h2 id="tv-choix-texte"></h2></div>
+      <div id="tv-revelation" class="voile revelation" hidden><p>Le mot était</p><div id="tv-mot" class="mot-revele"></div><div id="tv-gains"></div></div>
+    </div>
+    <aside>
+      <ul id="tv-scores" class="joueurs classement"></ul>
+      <ul id="tv-fil" class="fil"></ul>
+    </aside>
+  </div>
+</section>
+
+<!-- Podium -->
+<section id="tv-podium" class="tv-ecran" hidden>
+  <h1>🏆 Le podium</h1>
+  <div id="podium" class="podium"></div>
+  <ul id="tv-autres" class="joueurs classement"></ul>
+</section>
+<canvas id="confettis"></canvas>
+
+<script src="commun.js"></script>
+<script src="qrcode.js"></script>
+<script src="tv.js"></script>
+</body>
+</html>
